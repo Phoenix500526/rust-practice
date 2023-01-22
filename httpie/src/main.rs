@@ -2,6 +2,8 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use reqwest::{header, Client, Response, Url};
 use std::collections::HashMap;
+use colored::*;
+use mime::Mime;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -49,8 +51,7 @@ fn parse_kv_pairs(s: &str) -> Result<(String, String)> {
 
 async fn get(client: Client, args: &Get) -> Result<()> {
     let resp = client.get(&args.url).send().await?;
-    println!("{:?}", resp.text().await?);
-    Ok(())
+    Ok(print_resp(resp).await?)
 }
 
 async fn post(client: Client, args: &Post) -> Result<()> {
@@ -59,14 +60,51 @@ async fn post(client: Client, args: &Post) -> Result<()> {
         body.insert(key, value);
     }
     let resp = client.post(&args.url).json(&body).send().await?;
-    println!("{:?}", resp.text().await?);
+    Ok(print_resp(resp).await?)
+}
+
+fn print_status(resp: &Response) { 
+    let status = format!("{:?} {}", resp.version(), resp.status()).blue(); 
+    println!("{}\n", status);
+}
+
+fn print_headers(resp: &Response) {    
+    for (name, value) in resp.headers() {
+        println!("{}: {:?}", name.to_string().green(), value);    
+    }    
+    print!("\n");
+}
+
+fn print_body(m: Option<Mime>, body: &String) {    
+    match m {       
+    Some(v) if v == mime::APPLICATION_JSON => {            
+        println!("{}", jsonxf::pretty_print(body).unwrap().cyan())        
+    }       
+    _ => println!("{}", body),    
+    }
+}
+
+fn get_content_type(resp: &Response) -> Option<Mime> {
+    resp.headers().get(header::CONTENT_TYPE).map(|v| v.to_str().unwrap().parse().unwrap())
+}
+
+async fn print_resp(resp: Response) -> Result<()> {
+    print_status(&resp);    
+    print_headers(&resp);    
+    let mime = get_content_type(&resp);    
+    let body = resp.text().await?;    
+    print_body(mime, &body);    
     Ok(())
 }
+
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let opts: Opts = Opts::parse();
-    let client = Client::new();
+    let mut headers = header::HeaderMap::new();
+    headers.insert("X-POWERED-BY", "Rust".parse()?);
+    headers.insert(header::USER_AGENT, "Rust Httpie".parse()?);
+    let client = Client::builder().default_headers(headers).build()?;
     let result = match opts.subcmd {
         SubCommand::Get(ref args) => get(client, args).await?,
         SubCommand::Post(ref args) => post(client, args).await?,
